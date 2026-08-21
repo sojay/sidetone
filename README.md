@@ -127,6 +127,29 @@ creation, rule evaluation, dispatch. Composing, encoding and synthesising the
 whole message takes about 5ms. Every alert reports its own figure in the log and
 on the display, so it is clear which is which.
 
+## Before a demo
+
+```sh
+./demo.sh preflight
+```
+
+It checks each link separately — the station, whether the webhook secret is
+loaded, whether cloudflared is actually connected rather than merely running,
+whether the hostname it claims matches what Sentry is configured with, and
+whether the public URL reaches *this* process (compared by the instance id
+`/healthz` reports). It exits non-zero if anything is down, and names the link
+that is, because "nothing plays" has several possible causes.
+
+Set `SENTRY_WEBHOOK_HOST` in `.env` to the hostname you put in Sentry's webhook
+URL. Without it, preflight cannot catch the failure that hides best: a healthy
+tunnel on a new hostname while Sentry still posts to the old one.
+
+`./demo.sh` also drives the demo itself — `fatal`, `error`, `warning`, `queue`,
+and `flush` if too much gets queued. Flush empties everything behind the message
+on the air; that one has to finish, since a sink cannot be interrupted. It lives
+on a loopback-only port, because a request arriving through a tunnel comes from
+127.0.0.1 as well and cannot be told apart by address.
+
 ## Development
 
 ```sh

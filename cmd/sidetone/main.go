@@ -62,10 +62,24 @@ func main() {
 
 	logger := log.Default()
 
+	// flag cannot distinguish "-fire" with an empty value from -fire being
+	// absent, so ask whether it was actually typed. Without this, a typo like
+	// `-fire ""` silently starts a second station instead of reporting the
+	// mistake — and the bind failure that follows points nowhere useful.
+	fireGiven := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "fire" {
+			fireGiven = true
+		}
+	})
+	if fireGiven && strings.TrimSpace(*fire) == "" {
+		logger.Fatal("-fire needs a message, for example: -fire \"connection pool exhausted\"")
+	}
+
 	// -fire is a client, not a station: it sends an error to Sentry and stops.
 	// The alert comes back through the webhook to whichever sidetone is
 	// serving, so this path never opens the audio device.
-	if *fire != "" {
+	if fireGiven {
 		if err := fireError(*fire, *kind, *level, *unique, logger); err != nil {
 			logger.Fatalf("fire: %v", err)
 		}
@@ -209,8 +223,9 @@ func serve(ctx context.Context, p *player.Player, scope *bandscope.Hub, logger *
 	// Alerts and the display share one mux, so the demo needs only one port
 	// and one tunnel.
 	mux := http.NewServeMux()
-	webhook.New(webhook.Config{
+	alerts := webhook.New(webhook.Config{
 		Queue:     p,
+		Admin:     p,
 		Secret:    secret,
 		Logger:    logger,
 		Resources: keyedResourcesFromEnv(logger),
@@ -218,8 +233,30 @@ func serve(ctx context.Context, p *player.Player, scope *bandscope.Hub, logger *
 		OnReceived: func(r webhook.Received) {
 			scope.Received(r.Endpoint, r.Raw, r.Message, r.Alert, r.Resource, r.SentryLag)
 		},
-	}).Register(mux)
+	})
+	alerts.Register(mux)
 	scope.Register(mux)
+	logger.Printf("station instance %s", alerts.Instance())
+
+	// Local-only routes go on their own listener bound to the loopback address.
+	// A remote-address check would not do: the tunnel client connects from
+	// 127.0.0.1 itself, so tunnelled requests are indistinguishable from local
+	// ones. Only the public port is tunnelled, so a second port is private.
+	admin := http.NewServeMux()
+	alerts.RegisterAdmin(admin)
+
+	adminSrv := &http.Server{
+		Addr:              net.JoinHostPort("127.0.0.1", adminPort()),
+		Handler:           admin,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	go func() {
+		logger.Printf("local controls on http://127.0.0.1:%s (POST /flush)", adminPort())
+		if err := adminSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Printf("local controls unavailable: %v", err)
+		}
+	}()
+	defer adminSrv.Close()
 
 	srv := &http.Server{
 		Addr:    net.JoinHostPort("", portFromEnv()),
@@ -275,6 +312,17 @@ func keyedResourcesFromEnv(logger *log.Logger) []string {
 	}
 	logger.Printf("keying webhook resources: %v", out)
 	return out
+}
+
+// adminPort is the public port plus one unless ADMIN_PORT says otherwise.
+func adminPort() string {
+	if p := os.Getenv("ADMIN_PORT"); p != "" {
+		return p
+	}
+	if n, err := strconv.Atoi(portFromEnv()); err == nil {
+		return strconv.Itoa(n + 1)
+	}
+	return "8081"
 }
 
 func portFromEnv() string {

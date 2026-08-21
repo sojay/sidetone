@@ -322,6 +322,25 @@ func (p *Player) Snapshot() Snapshot {
 	return s
 }
 
+// Flush empties the queue and reports how many messages were discarded.
+//
+// It cannot stop the transmission already on the air — a sink is playing to a
+// device and has no way to be cut short — so the current message finishes and
+// everything behind it is dropped. That is the escape hatch for a demo where
+// too much got queued: the alternative is restarting the station.
+func (p *Player) Flush() int {
+	p.mu.Lock()
+	n := len(p.queue)
+	p.queue = nil
+	p.dropped += n
+	p.mu.Unlock()
+
+	if n > 0 {
+		p.logger.Printf("player: flushed %d queued messages", n)
+	}
+	return n
+}
+
 // Depth is the number of messages waiting, excluding any now playing.
 func (p *Player) Depth() int {
 	p.mu.Lock()

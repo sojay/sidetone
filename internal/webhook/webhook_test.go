@@ -762,6 +762,109 @@ func TestHandlerDoesNotWaitOnAudio(t *testing.T) {
 	}
 }
 
+// fakeAdmin stands in for the player on the local-only routes.
+type fakeAdmin struct{ flushed, depth int }
+
+func (f *fakeAdmin) Flush() int { n := f.depth; f.depth = 0; f.flushed = n; return n }
+func (f *fakeAdmin) Depth() int { return f.depth }
+
+// TestHealthzReportsAnInstance is what lets a preflight check prove the public
+// URL reaches *this* process rather than merely getting a 200 from something.
+func TestHealthzReportsAnInstance(t *testing.T) {
+	srv := newServer(&fakeQueue{})
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	var body struct {
+		OK       bool   `json:"ok"`
+		Instance string `json:"instance"`
+	}
+	json.NewDecoder(rec.Body).Decode(&body)
+
+	if !body.OK {
+		t.Error("ok = false")
+	}
+	if len(body.Instance) != 8 {
+		t.Errorf("instance = %q, want 8 hex characters", body.Instance)
+	}
+	if body.Instance != srv.Instance() {
+		t.Errorf("/healthz says %q, Instance() says %q", body.Instance, srv.Instance())
+	}
+
+	// Two stations must be distinguishable, or the check proves nothing.
+	if newServer(&fakeQueue{}).Instance() == srv.Instance() {
+		t.Error("two servers share an instance id")
+	}
+}
+
+// TestFlushIsNotOnThePublicMux is the point of a separate listener: a tunnelled
+// request arrives from 127.0.0.1 like any local one, so the route simply must
+// not exist on the port that is exposed.
+func TestFlushIsNotOnThePublicMux(t *testing.T) {
+	admin := &fakeAdmin{depth: 3}
+	srv := New(Config{Queue: &fakeQueue{}, Secret: testSecret, Admin: admin})
+
+	// Mirror the deployed mux: the band scope registers a "GET /" catch-all
+	// alongside these routes, which makes an unregistered POST come back 405
+	// rather than 404. The status is incidental — what must hold is that the
+	// handler never runs.
+	mux := http.NewServeMux()
+	srv.Register(mux)
+	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {})
+
+	req := httptest.NewRequest(http.MethodPost, "/flush", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusOK {
+		t.Errorf("public mux served /flush with 200")
+	}
+	if admin.flushed != 0 || admin.depth != 3 {
+		t.Errorf("the public route flushed the queue: flushed=%d depth=%d", admin.flushed, admin.depth)
+	}
+}
+
+func TestFlushOnTheAdminMux(t *testing.T) {
+	admin := &fakeAdmin{depth: 3}
+	srv := New(Config{Queue: &fakeQueue{}, Secret: testSecret, Admin: admin})
+
+	mux := http.NewServeMux()
+	srv.RegisterAdmin(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/flush", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body)
+	}
+	var body struct {
+		Flushed int `json:"flushed"`
+		Depth   int `json:"depth"`
+	}
+	json.NewDecoder(rec.Body).Decode(&body)
+	if body.Flushed != 3 || body.Depth != 0 {
+		t.Errorf("flushed %d leaving %d, want 3 and 0", body.Flushed, body.Depth)
+	}
+}
+
+// Without an Admin the route reports itself absent rather than panicking.
+func TestFlushWithoutAdmin(t *testing.T) {
+	srv := newServer(&fakeQueue{})
+	mux := http.NewServeMux()
+	srv.RegisterAdmin(mux)
+
+	req := httptest.NewRequest(http.MethodPost, "/flush", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	q := &fakeQueue{}
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)

@@ -250,6 +250,11 @@
   }
   .panel > .body { padding: var(--s3) var(--s4); min-height: 0; overflow: auto; }
 
+  /* Height behaviour as classes rather than inline styles, so the stacked
+     layout below can actually override it. */
+  .pane-fit  { flex: none; }
+  .pane-grow { flex: 1; }
+
   /* The two values that change per message, inline in the sending header. */
   .ro-v {
     font-family: var(--mono);
@@ -691,9 +696,26 @@
   @media (max-width: 1200px) {
     body { overflow: auto; height: auto; }
     main { grid-template-columns: minmax(0, 1fr); }
-    .scope-panel { flex: none; height: 260px; }
     header { flex-wrap: wrap; row-gap: 10px; gap: 18px; }
     .clocks { margin: 0; }
+
+    /* Stacked, the page scrolls, so every panel takes exactly the height its
+       content needs. Constraining them left a gap under the payload panel and
+       clipped both the JSON and the queue mid-row. */
+    .col { display: flex; }
+    .pane-fit, .pane-grow, .payload-panel, .traffic-panel { flex: none; max-height: none; }
+    .panel > .body { overflow: visible; }
+    .scope-panel { flex: none; height: 260px; }
+    .waterfall-panel { flex: none; height: 150px; }
+
+    /* The legend follows the content instead of being pushed to the bottom of
+       a column that no longer has a bottom. */
+    .legend { margin-top: 0; }
+
+    /* The decode strip and the traffic log keep their own scrolling, since both
+       can be genuinely long. */
+    #payload { max-height: 340px; overflow: auto; }
+    #log { max-height: 420px; overflow: auto; }
   }
 
   @media (max-width: 760px) {
@@ -759,7 +781,7 @@
 
     <!-- The reference's band-conditions table, reused for what actually varies
          here: how each severity sounds. -->
-    <div class="panel" style="flex:none">
+    <div class="panel pane-fit">
       <div class="head"><span class="ic">▤</span><span class="label">Profiles</span></div>
       <div class="body">
         <table class="profiles">
@@ -789,7 +811,7 @@
        reference. It is the one thing worth looking at while a message sends. -->
   <div class="col centre">
 
-    <div class="panel sending" style="flex:none">
+    <div class="panel sending pane-fit">
       <div class="head">
         <span class="ic">◉</span><span class="label">On the air</span>
         <span id="nowChip"></span>
@@ -838,7 +860,7 @@
   <!-- Right rail: the traffic, as the reference stacks its spot lists. -->
   <div class="col rail">
 
-    <div class="panel" style="flex:1">
+    <div class="panel pane-grow">
       <div class="head">
         <span class="ic">≡</span><span class="label">Queue</span>
         <span class="label" id="backlog" style="margin-left:auto"></span>

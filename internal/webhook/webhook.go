@@ -8,6 +8,7 @@ package webhook
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -51,6 +52,12 @@ const (
 	ErrorResource = "error"
 )
 
+// An Admin is the part of the player the local-only routes need.
+type Admin interface {
+	Flush() int
+	Depth() int
+}
+
 // A Queue is the part of the player this package needs. Keeping it narrow means
 // the handler tests do not need audio, a player, or a goroutine.
 type Queue interface {
@@ -67,6 +74,9 @@ type Config struct {
 	// refuses every request: accepting unsigned alerts from the open internet
 	// is not a trade worth making, and /test is there for local demos.
 	Secret string
+
+	// Admin, if set, enables the local-only routes registered by RegisterAdmin.
+	Admin Admin
 
 	// Resources are the Sentry-Hook-Resource values that get keyed. Empty means
 	// just AlertResource. Anything not listed is acknowledged and dropped.
@@ -100,10 +110,16 @@ type Received struct {
 // A Server routes alert requests into the queue.
 type Server struct {
 	queue      Queue
+	admin      Admin
 	secret     string
 	logger     *log.Logger
 	onReceived func(Received)
 	resources  map[string]bool
+
+	// instance identifies this process. A 200 from /healthz only proves that
+	// something answered; comparing this value through a tunnel proves the
+	// public URL reaches *this* station and not a stale one.
+	instance string
 }
 
 // New returns a Server.
@@ -128,6 +144,8 @@ func New(cfg Config) *Server {
 	}
 
 	return &Server{
+		instance:   newInstanceID(),
+		admin:      cfg.Admin,
 		queue:      cfg.Queue,
 		secret:     cfg.Secret,
 		logger:     logger,
@@ -248,7 +266,46 @@ func (s *Server) handleTest(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "depth": s.queue.Depth()})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":       true,
+		"depth":    s.queue.Depth(),
+		"instance": s.instance,
+	})
+}
+
+// Instance is this process's id, as reported by /healthz.
+func (s *Server) Instance() string { return s.instance }
+
+// RegisterAdmin adds routes that must never be reachable from the internet.
+// They belong on a listener bound to the loopback interface: requests arriving
+// through a tunnel appear to come from 127.0.0.1 too, because the tunnel client
+// connects locally, so checking the remote address cannot tell them apart.
+func (s *Server) RegisterAdmin(mux *http.ServeMux) {
+	mux.HandleFunc("POST /flush", s.handleFlush)
+}
+
+func (s *Server) handleFlush(w http.ResponseWriter, r *http.Request) {
+	if s.admin == nil {
+		http.Error(w, "flush is not enabled", http.StatusNotFound)
+		return
+	}
+
+	n := s.admin.Flush()
+	s.logger.Printf("webhook: flushed %d queued messages", n)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"flushed": n,
+		"depth":   s.admin.Depth(),
+		"note":    "the message already on the air finishes; everything behind it is gone",
+	})
+}
+
+// newInstanceID is eight hex characters — enough to tell two runs apart.
+func newInstanceID() string {
+	var raw [4]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "unknown"
+	}
+	return hex.EncodeToString(raw[:])
 }
 
 // enqueue composes the alert, queues it and answers. This is the only place

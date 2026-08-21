@@ -727,6 +727,66 @@ func TestSnapshotIsACopy(t *testing.T) {
 	}
 }
 
+// TestFlush covers the demo escape hatch: too much queued, and the only other
+// way out is restarting the station.
+func TestFlush(t *testing.T) {
+	p := New(Config{Sink: &fakeSink{}})
+
+	for i := 0; i < 5; i++ {
+		p.Enqueue(warning("noise"))
+	}
+	p.Enqueue(fatal("also gone"))
+
+	if got := p.Flush(); got != 6 {
+		t.Errorf("Flush() = %d, want 6", got)
+	}
+	if got := p.Depth(); got != 0 {
+		t.Errorf("Depth() = %d after flush, want 0", got)
+	}
+	// Flushed messages are dropped messages, and the counter should say so.
+	if got := p.Dropped(); got != 6 {
+		t.Errorf("Dropped() = %d, want 6", got)
+	}
+	if got := p.Flush(); got != 0 {
+		t.Errorf("flushing an empty queue reported %d", got)
+	}
+}
+
+// TestFlushLeavesTheAirAlone: a sink cannot be interrupted, so the message
+// already playing has to finish.
+func TestFlushLeavesTheAirAlone(t *testing.T) {
+	gate := make(chan struct{})
+	p := New(Config{Sink: &fakeSink{gate: gate}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	p.Enqueue(fatal("on the air"))
+	p.Enqueue(warning("queued"))
+	go p.Run(ctx)
+
+	deadline := time.After(5 * time.Second)
+	for p.Snapshot().Playing == nil {
+		select {
+		case <-deadline:
+			t.Fatal("playback never started")
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	p.Flush()
+	if s := p.Snapshot(); s.Playing == nil || s.Playing.Text != "on the air" {
+		t.Error("flush interrupted the transmission on the air")
+	}
+	if got := p.Depth(); got != 0 {
+		t.Errorf("Depth() = %d, want the queue behind it emptied", got)
+	}
+
+	close(gate)
+	cancel()
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
