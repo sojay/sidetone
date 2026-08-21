@@ -1,0 +1,23 @@
+# Credentials. SENTRY_DSN and SENTRY_CLIENT_SECRET live in .env; neither belongs
+# in version control. .env.example is the documented template and is tracked.
+.env
+.env.*
+!.env.example
+
+# The built binary, anchored to the repo root. An unanchored "sidetone" would
+# also match cmd/sidetone/, silently excluding the main package from commits.
+/sidetone
+
+# The WAV fallback's scratch file, if it is ever written into the tree.
+/sidetone.wav
+
+# macOS and local tool state.
+.DS_Store
+.claude/settings.local.json
+.impeccable/hook.cache.json
+
+# Internal working docs — kept locally, not part of the published repo.
+# README.md is the public entry point.
+/CLAUDE.md
+/RUNBOOK.md
+/ARCHITECTURE.md

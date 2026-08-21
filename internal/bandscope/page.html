@@ -1,0 +1,1602 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sidetone — band scope</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@400;500;700&display=swap">
+<style>
+  /* Palette and type taken from openhamclock.com, which this display is
+     deliberately modelled on: amber chrome on near-black, mono for every
+     number, a shack-instrument density. Values are its own tokens, not
+     approximations of them. */
+  :root {
+    --bg:        #0a0e14;
+    --panel:     #111820;
+    --panel-2:   #1a2332;
+    --panel-fill: rgba(17, 24, 32, .92);
+
+    --amber:     #ffb432;
+    --amber-dim: rgba(255, 180, 50, .25);
+    --amber-mid: rgba(255, 180, 50, .6);
+
+    --rule:      rgba(255, 180, 50, .18);
+    --rule-firm: rgba(255, 180, 50, .32);
+
+    --ink:       #f0f4f8;
+    --muted:     #a0b0c0;
+    --dim:       #8899aa;
+
+    /* Not-yet-sent decode text. Measured at 3.35:1 on the panel, which clears
+       the large-text floor while leaving an obvious gap to --ink so the reveal
+       reads from the back of a room. */
+    --decode-upcoming: #5b6b7a;
+
+    /* Severity keeps its own vocabulary, borrowed from the reference's accents:
+       red is urgent, amber is mid, cyan is calm. */
+    --fatal:   #ff4466;
+    --error:   #ffb432;
+    --warning: #00ddff;
+    --live:    #00ff88;
+
+    /* 4-unit base. Tight steps live inside a group, generous ones separate
+       groups; the previous layout used 11-14px everywhere, which gave every
+       relationship the same weight. */
+    --s1: 4px;
+    --s2: 8px;
+    --s3: 12px;
+    --s4: 16px;
+    --s5: 20px;
+    --s6: 28px;
+
+    --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body { height: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s5);        /* header is its own group, well clear of the panels */
+    padding: var(--s4);
+    overflow: hidden;
+  }
+
+  .label {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .2em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  /* ---------- header ----------
+     One bar, three zones: identity, clocks, indices. The reference keeps this
+     fixed at the top with everything live inside it. */
+  header {
+    display: flex;
+    align-items: center;
+    gap: 28px;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    background: var(--panel-fill);
+    padding: var(--s2) var(--s4);
+    flex: none;
+  }
+
+  .ident { display: flex; align-items: baseline; gap: 10px; }
+
+  .station {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: .12em;
+    color: var(--amber);
+  }
+  .callsign {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .18em;
+    color: var(--bg);
+    background: var(--amber);
+    border-radius: 2px;
+    padding: 2px 5px;
+  }
+
+  .clocks { display: flex; gap: 34px; margin: 0 auto; }
+  .clock { display: flex; align-items: baseline; gap: 9px; }
+  .ck-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .16em;
+    color: var(--accent-cyan, #00ddff);
+  }
+  .ck-label.local { color: var(--amber); }
+  .ck-time {
+    font-family: var(--mono);
+    /* Chrome, not content: the clocks were within 4px of the decode text and
+       competed with it. */
+    font-size: 19px;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: .02em;
+    color: #00ddff;
+  }
+  .ck-time.local { color: var(--amber); }
+  .ck-date {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .indices { display: flex; align-items: center; gap: 18px; }
+  .ix { display: flex; align-items: baseline; gap: 6px; }
+  .ix-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: .14em;
+    color: var(--muted);
+  }
+  .ix-v {
+    font-family: var(--mono);
+    font-size: 17px;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  .ix-v.sent { color: var(--live); }
+  .ix-v.drop { color: var(--fatal); }
+
+  /* The lamp reads lit from its own colour and a hot core, the way a real
+     indicator does — not from a halo around it. */
+  .lamp {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border: 1px solid var(--rule-firm);
+    border-radius: 2px;
+    padding: 4px 8px;
+  }
+  .lamp .bulb {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--dim);
+    border: 1px solid var(--rule-firm);
+  }
+  .lamp.on {
+    color: var(--live);
+    border-color: color-mix(in srgb, var(--live) 45%, transparent);
+    background: color-mix(in srgb, var(--live) 10%, transparent);
+  }
+  .lamp.on .bulb {
+    border-color: color-mix(in srgb, var(--live) 60%, transparent);
+    background: radial-gradient(circle at 38% 34%,
+      color-mix(in srgb, var(--live) 55%, #FFFFFF) 0%,
+      var(--live) 55%,
+      color-mix(in srgb, var(--live) 72%, #000000) 100%);
+    animation: breathe 2.4s ease-in-out infinite;
+  }
+
+  @keyframes breathe {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: .62; }
+  }
+
+  /* ---------- layout ----------
+     Three columns with the heavy element in the middle, as the reference does
+     with its map. The rails are fixed so the centre absorbs the window. */
+  main {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 300px minmax(0, 1fr) 320px;
+    gap: var(--s5);        /* three distinct groups: generous */
+  }
+  /* Panels stacked in one column belong together, so they sit tight. */
+  .col { display: flex; flex-direction: column; gap: var(--s2); min-height: 0; min-width: 0; }
+  .centre { min-width: 0; }
+
+  .panel {
+    background: var(--panel-fill);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .panel > .head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: var(--s2) var(--s3);
+    border-bottom: 1px solid var(--rule);
+    flex: none;
+  }
+  .panel > .head .ic {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--amber);
+  }
+  .panel > .head .label { color: var(--amber); }
+  .panel > .head .hint {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--dim);
+  }
+  .panel > .body { padding: var(--s3) var(--s4); min-height: 0; overflow: auto; }
+
+  /* The two values that change per message, inline in the sending header. */
+  .ro-v {
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: var(--amber);
+  }
+  .ro-u { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  .elapsed {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    margin-top: 9px;
+    padding-top: 9px;
+    border-top: 1px solid var(--rule);
+  }
+  .elapsed b { color: var(--ink); font-weight: 600; }
+
+  /* Fixed reference table, in the reference's band-conditions idiom. */
+  table.profiles {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+  }
+  table.profiles td { padding: 4px 0; }
+  table.profiles .pl { font-weight: 700; letter-spacing: .08em; }
+  table.profiles .pn { text-align: right; padding-right: 4px; color: var(--ink); }
+  table.profiles .pu { color: var(--dim); font-size: 10px; padding-right: 12px; }
+  table.profiles tr.fatal   .pl { color: var(--fatal); }
+  table.profiles tr.error   .pl { color: var(--error); }
+  table.profiles tr.warning .pl { color: var(--warning); }
+
+  /* Pill legend along the bottom of the centre column. */
+  .legend {
+    margin-top: auto;      /* pinned to the bottom; slack sits above it */
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+    flex-wrap: wrap;
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    background: var(--panel-fill);
+    padding: 8px 11px;
+  }
+  .lg-label {
+    font-family: var(--sans);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--amber);
+    margin-right: 4px;
+  }
+  .lg-note {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--dim);
+    margin-left: auto;
+  }
+  .pill {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .06em;
+    color: var(--bg);
+    border-radius: 3px;
+    padding: 3px 8px;
+  }
+  /* Colour is declared here, not on .pill: the .fatal/.error/.warning chip
+     rules come later in this sheet and would otherwise repaint the text to
+     match its own background, leaving an unreadable block. */
+  .pill.fatal   { background: var(--fatal);   color: var(--bg); }
+  .pill.error   { background: var(--error);   color: var(--bg); }
+  .pill.warning { background: var(--warning); color: var(--bg); }
+
+  /* ---------- scope ---------- */
+  /* The scope is tall enough to read as the centrepiece but not so tall that a
+     dit and a dah stop looking different — past about 340px the bars turn into
+     a barcode. The decode strip below takes the rest, because that is the panel
+     the room actually reads. */
+  .scope-panel { flex: none; height: 260px; }
+  #scope { display: block; width: 100%; flex: 1; min-height: 0; }
+
+  /* The waterfall is the history panel: every transmission the station has sent
+     in the last ten minutes, in its own pitch lane. It takes the centre's
+     leftover height, which is what gives it the weight the reference's map has. */
+  .waterfall-panel { flex: 1 1 auto; min-height: 150px; max-height: 300px; }
+
+  /* Rail panels take the height their content needs and no more. Stretching a
+     bordered box to fill a column is what made six lines of JSON look like a
+     rendering fault. A rail that simply ends is calm; a half-empty panel is not. */
+  .payload-panel { flex: 0 1 auto; max-height: 46%; }
+  .traffic-panel { flex: 1 1 auto; min-height: 180px; }
+  .rail { align-content: start; }
+
+  /* The transmission's facts, inline in its own header. */
+  .sending .nowline { margin-left: auto; gap: var(--s4); }
+  .sending .ro-v { font-size: 18px; font-weight: 700; color: var(--amber); }
+  .sending .ro-u { margin-left: 3px; }
+  .sending .elapsed {
+    margin: 0; padding: 0; border: 0;
+    font-size: 12px; color: var(--muted);
+  }
+  #waterfall { display: block; width: 100%; flex: 1; min-height: 0; }
+
+  .nowline {
+    display: flex;
+    align-items: baseline;
+    gap: 14px;
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .nowline b { color: var(--ink); font-weight: 600; }
+
+  .progress {
+    height: 2px;
+    background: var(--rule);
+    flex: none;
+  }
+  /* Scaled, not resized: this updates every frame next to a live canvas, and
+     animating width would re-run layout each time. */
+  .progress .fill {
+    height: 100%;
+    width: 100%;
+    background: var(--live);
+    transform: scaleX(0);
+    transform-origin: left center;
+    transition: transform .08s linear;
+  }
+
+  /* ---------- decode ---------- */
+  #decode {
+    font-family: var(--mono);
+    font-size: clamp(17px, 2.7vw, 40px);
+    line-height: 1.9;
+    letter-spacing: .04em;
+    word-break: break-word;
+  }
+  #decode .ch { color: var(--decode-upcoming); transition: color .1s; }
+  #decode .ch.sent { color: var(--ink); }
+  #decode .ch.now {
+    color: var(--bg);
+    background: var(--live);
+    border-radius: 2px;
+    padding: 0 2px;
+  }
+  #decode .ch.sp { padding: 0 .3em; }
+
+  /* The character sounding right now, spelled out. Sized to be readable from
+     the back of a room, since this is the panel that explains the noise. */
+  #cursor {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    font-family: var(--mono);
+    font-size: 30px;
+    line-height: 1.2;
+    letter-spacing: .22em;
+    color: var(--live);
+    min-height: 46px;
+    padding-top: 10px;
+    margin-top: 10px;
+    border-top: 1px solid var(--rule);
+  }
+  #cursor .sym {
+    color: var(--muted);
+    font-size: 15px;
+    letter-spacing: .18em;
+  }
+
+  /* No character, no rule: an empty cursor must not leave a divider floating
+     under the standby copy. */
+  #cursor:empty { display: none; }
+
+  /* Between characters nothing is sounding. The last character stays up,
+     dimmed, rather than blinking out for the length of every gap. */
+  #cursor.gap { color: var(--dim); }
+
+  /* ---------- queue ----------
+     Flat rows on hairlines, not cards inside a card. The level chip is the
+     same component as the one in the keying header, so severity looks the
+     same everywhere on the page. */
+  .rows { display: flex; flex-direction: column; }
+
+  .row {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-areas: "chip when" "text text";
+    gap: 4px 10px;
+    align-items: baseline;
+    padding: 11px 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  .row:first-child { padding-top: 2px; }
+  .row:last-child { border-bottom: none; padding-bottom: 2px; }
+
+  .row .chip { grid-area: chip; justify-self: start; }
+
+  .row .text {
+    grid-area: text;
+    font-family: var(--mono);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--muted);
+  }
+
+  /* When it will be heard, which is what someone watching actually wants to
+     know — the duration alone does not answer it. */
+  .row .when {
+    grid-area: when;
+    justify-self: end;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .row.next .when { color: var(--ink); }
+  .row.next .text { color: var(--ink); }
+
+  /* Empty states teach the interface rather than reporting that it is empty. */
+  /* An author display rule beats the hidden attribute's UA display:none, so
+     hiding one needs saying explicitly — otherwise the traffic panel shows its
+     "nothing yet" copy underneath a list of rows. */
+  .empty[hidden] { display: none; }
+
+  .empty {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 12.5px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+  .empty .cmd {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink);
+    background: var(--panel-2);
+    border: 1px solid var(--rule);
+    border-radius: 2px;
+    padding: 9px 10px;
+    overflow-x: auto;
+    white-space: pre;
+  }
+
+  /* ---------- log ----------
+     Rows are buttons: clicking one pins it into the payload panel for a closer
+     look, which is why they carry a full hover / focus / selected vocabulary. */
+  #log { display: flex; flex-direction: column-reverse; gap: 1px; }
+
+  .ev {
+    display: grid;
+    grid-template-columns: 62px 74px 1fr;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    align-items: baseline;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: 0;
+    border-radius: 2px;
+    padding: 4px 6px;
+    margin: 0 -6px;
+    cursor: pointer;
+    transition: background-color 140ms ease-out;
+  }
+  .ev:hover { background: var(--panel-2); }
+  .ev:active { background: var(--rule); }
+  .ev[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--live) 12%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--live) 40%, transparent);
+  }
+  .ev[aria-pressed="true"] .d { color: var(--ink); }
+  .ev .k { font-weight: 700; letter-spacing: .1em; text-transform: uppercase; }
+  .ev .t { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .ev .d { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ev.received .k { color: var(--live); }
+  .ev.started  .k { color: var(--ink); }
+  .ev.dropped  .k { color: var(--fatal); }
+  .ev.dropped  .d { color: var(--fatal); }
+
+  /* ---------- payload ---------- */
+  #payload {
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 1.55;
+    color: var(--muted);
+    white-space: pre;
+    overflow: auto;
+    margin: 0;
+    max-height: 100%;
+  }
+  .arrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--live);
+    padding: 8px 0 0;
+    margin-top: 8px;
+    border-top: 1px solid var(--rule);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: none;
+  }
+
+  /* Facts about the pinned event, above its payload. */
+  #payloadMeta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 18px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    padding-bottom: 10px;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--rule);
+    flex: none;
+  }
+  #payloadMeta:empty { display: none; }
+  #payloadMeta b { color: var(--ink); font-weight: 600; }
+
+  /* A quiet text button — the only control on the page, so it borrows the
+     label vocabulary rather than inventing a button style. */
+  .ghost {
+    font-family: var(--sans);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--live);
+    background: none;
+    border: 1px solid color-mix(in srgb, var(--live) 40%, transparent);
+    border-radius: 2px;
+    padding: 4px 9px;
+    cursor: pointer;
+    transition: background-color 140ms ease-out;
+  }
+  .ghost:hover { background: color-mix(in srgb, var(--live) 14%, transparent); }
+  .ghost:active { background: color-mix(in srgb, var(--live) 22%, transparent); }
+  .ghost[hidden] { display: none; }
+
+  .chip {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    padding: 1px 5px;
+  }
+  .fatal   { color: var(--fatal); }
+  .error   { color: var(--error); }
+  .warning { color: var(--warning); }
+
+  /* A dead stream is the one failure that makes every other number on this
+     page a lie, so it says what broke and what is being done about it. */
+  #conn {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: .06em;
+    color: var(--fatal);
+    border: 1px solid color-mix(in srgb, var(--fatal) 45%, transparent);
+    background: color-mix(in srgb, var(--fatal) 10%, transparent);
+    border-radius: 2px;
+    padding: 5px 10px;
+  }
+  #conn.show { display: flex; }
+  #conn .bulb {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    background: var(--fatal);
+    border: 1px solid color-mix(in srgb, var(--fatal) 60%, transparent);
+    animation: breathe 1.2s ease-in-out infinite;
+  }
+
+  /* One authored moment: the handover between transmissions. Everything else
+     on the page changes without ceremony. */
+  .handover { animation: handover 220ms cubic-bezier(.16, 1, .3, 1); }
+
+  @keyframes handover {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  /* ---------- browser surfaces ----------
+     The parts we did not draw still belong to the design: selection, the
+     scrollbars on every panel, and the focus ring all ship with defaults that
+     come from no design system. */
+  ::selection {
+    background: color-mix(in srgb, var(--live) 32%, transparent);
+    color: #FFFFFF;
+  }
+
+  * { scrollbar-width: thin; scrollbar-color: var(--rule-firm) transparent; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--rule-firm);
+    border: 3px solid var(--panel);
+    border-radius: 6px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+  ::-webkit-scrollbar-corner { background: transparent; }
+
+  /* Panels scroll, so they take keyboard focus even though nothing here is
+     clickable. */
+  :focus-visible {
+    outline: 2px solid var(--live);
+    outline-offset: -2px;
+    border-radius: 2px;
+  }
+
+  /* ---------- responsive ----------
+     Structural, not fluid: the rails drop under the centre and the header wraps.
+     Class names here track the reskinned header — the previous rules referred to
+     a counters block that no longer exists, which is how a phone ended up
+     scrolling sideways. */
+  @media (max-width: 1200px) {
+    body { overflow: auto; height: auto; }
+    main { grid-template-columns: minmax(0, 1fr); }
+    .scope-panel { flex: none; height: 260px; }
+    header { flex-wrap: wrap; row-gap: 10px; gap: 18px; }
+    .clocks { margin: 0; }
+  }
+
+  @media (max-width: 760px) {
+    body { padding: 10px; gap: 10px; }
+    .station { font-size: 17px; letter-spacing: .1em; }
+    .clocks { gap: 18px; width: 100%; }
+    .ck-time { font-size: 20px; }
+    .ck-date { display: none; }
+    .indices { width: 100%; justify-content: space-between; gap: 10px; }
+    .ix-v { font-size: 16px; }
+    #decode { font-size: 16px; line-height: 1.8; }
+    #cursor { font-size: 22px; }
+    .scope-panel { height: 200px; }
+    .waterfall-panel { height: 140px; }
+    .ev { grid-template-columns: 56px 66px 1fr; }
+    .legend { row-gap: 6px; }
+    .lg-note { display: none; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .progress .fill { transition: none; }
+    .lamp.on .bulb  { animation: none; }
+    #decode .ch     { transition: none; }
+    .handover       { animation: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Header bar, after the reference: identity at the left, big mono clocks in
+     the middle, live indices right-aligned where its space-weather readouts sit. -->
+<header>
+  <div class="ident">
+    <span class="station">SIDETONE</span>
+    <span class="callsign">CW</span>
+  </div>
+
+  <div class="clocks">
+    <div class="clock">
+      <span class="ck-label">UTC</span>
+      <span class="ck-time" id="clockUTC">--:--:--</span>
+      <span class="ck-date" id="dateUTC"></span>
+    </div>
+    <div class="clock">
+      <span class="ck-label local">LOCAL</span>
+      <span class="ck-time local" id="clockLocal">--:--:--</span>
+      <span class="ck-date" id="dateLocal"></span>
+    </div>
+  </div>
+
+  <div class="indices">
+    <div class="lamp" id="lamp"><span class="bulb"></span><span id="lampText">Standby</span></div>
+    <span id="conn"><span class="bulb"></span>Stream lost — reconnecting</span>
+    <div class="ix"><span class="ix-label">QUEUED</span><span class="ix-v" id="cDepth">0</span></div>
+    <div class="ix"><span class="ix-label">SENT</span><span class="ix-v sent" id="cPlayed">0</span></div>
+    <div class="ix"><span class="ix-label">DROPPED</span><span class="ix-v drop" id="cDropped">0</span></div>
+  </div>
+</header>
+
+<main>
+  <!-- Left rail: what is on the air, and the station's fixed profiles. -->
+  <div class="col rail">
+
+    <!-- The reference's band-conditions table, reused for what actually varies
+         here: how each severity sounds. -->
+    <div class="panel" style="flex:none">
+      <div class="head"><span class="ic">▤</span><span class="label">Profiles</span></div>
+      <div class="body">
+        <table class="profiles">
+          <tr class="fatal"><td class="pl">FATAL</td><td class="pn">28</td><td class="pu">wpm</td><td class="pn">800</td><td class="pu">Hz</td></tr>
+          <tr class="error"><td class="pl">ERROR</td><td class="pn">20</td><td class="pu">wpm</td><td class="pn">700</td><td class="pu">Hz</td></tr>
+          <tr class="warning"><td class="pl">WARNING</td><td class="pn">13</td><td class="pu">wpm</td><td class="pn">600</td><td class="pu">Hz</td></tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel payload-panel">
+      <div class="head">
+        <span class="ic">⌗</span><span class="label" id="payloadTitle">Last payload</span>
+        <span class="label" id="payloadFrom" style="margin-left:auto"></span>
+        <button type="button" class="ghost" id="unpin" hidden>Live</button>
+      </div>
+      <div class="body" style="display:flex;flex-direction:column;min-height:0">
+        <div id="payloadMeta"></div>
+        <pre id="payload">No alert received yet. The JSON that produced each message shows up here.</pre>
+        <div class="arrow" id="payloadMsg"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Centre: the scope takes the position and visual weight the map has in the
+       reference. It is the one thing worth looking at while a message sends. -->
+  <div class="col centre">
+
+    <div class="panel sending" style="flex:none">
+      <div class="head">
+        <span class="ic">◉</span><span class="label">On the air</span>
+        <span id="nowChip"></span>
+        <div class="nowline">
+          <span><b class="ro-v" id="nowWpm">—</b><span class="ro-u">wpm</span></span>
+          <span><b class="ro-v" id="nowFreq">—</b><span class="ro-u">Hz</span></span>
+          <span class="elapsed"><b id="nowTime">0.0</b> / <span id="nowTotal">0.0</span>s</span>
+        </div>
+      </div>
+      <div class="body">
+        <div id="decode"><div class="empty">Connecting to the station…</div></div>
+        <div id="cursor"></div>
+      </div>
+    </div>
+
+    <div class="panel scope-panel">
+      <div class="head">
+        <span class="ic">∿</span><span class="label">Keying</span>
+        <span class="hint">past ◀ playhead ▶ upcoming</span>
+      </div>
+      <canvas id="scope"></canvas>
+      <div class="progress"><div class="fill" id="progress"></div></div>
+    </div>
+
+    <div class="panel waterfall-panel">
+      <div class="head">
+        <span class="ic">▚</span><span class="label">Waterfall</span>
+        <span class="hint" id="wfSpan">last 4 minutes · newest at the right</span>
+      </div>
+      <canvas id="waterfall"></canvas>
+    </div>
+
+
+    <!-- The reference ends its map with a row of band pills; this is the same
+         device carrying the severity legend. -->
+    <div class="legend">
+      <span class="lg-label">Severity</span>
+      <span class="pill fatal">FATAL 800 Hz</span>
+      <span class="pill error">ERROR 700 Hz</span>
+      <span class="pill warning">WARNING 600 Hz</span>
+      <span class="lg-note">faster and higher is more urgent</span>
+    </div>
+
+  </div>
+
+  <!-- Right rail: the traffic, as the reference stacks its spot lists. -->
+  <div class="col rail">
+
+    <div class="panel" style="flex:1">
+      <div class="head">
+        <span class="ic">≡</span><span class="label">Queue</span>
+        <span class="label" id="backlog" style="margin-left:auto"></span>
+      </div>
+      <div class="body"><div class="rows" id="queue"></div></div>
+    </div>
+
+    <div class="panel traffic-panel">
+      <div class="head"><span class="ic">⇅</span><span class="label">Traffic</span></div>
+      <div class="body">
+        <div id="log"></div>
+        <div class="empty" id="logEmpty">Nothing received yet. Every alert, and every one dropped, is listed here — click a row to inspect its payload.</div>
+      </div>
+    </div>
+
+  </div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var LEVELS = { fatal: "fatal", error: "error", warning: "warning" };
+  var WINDOW_MS = 7000;   // how much time the scope shows at once
+  var PLAYHEAD  = 0.62;   // where "now" sits across the canvas
+
+  var playing = null;     // current Transmission
+  var originMs = 0;       // performance.now() corresponding to unit 0
+  var spans = [];         // flattened key-down spans, in units
+  var stats = { depth: 0, played: 0, dropped: 0 };
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  // ---- keying spans -------------------------------------------------------
+  // Expand each character's dit/dah spelling into absolute unit offsets, so
+  // the scope can draw the whole message including the part not yet sent.
+  function toSpans(t) {
+    var out = [];
+    t.symbols.forEach(function (s) {
+      if (!s.code) return;
+      var at = s.start;
+      for (var i = 0; i < s.code.length; i++) {
+        var len = s.code[i] === "-" ? 3 : 1;
+        out.push({ start: at, len: len });
+        at += len + 1; // one unit of silence inside a character
+      }
+    });
+    return out;
+  }
+
+  function elapsedUnits() {
+    if (!playing) return 0;
+    return (performance.now() - originMs) / playing.unitMs;
+  }
+
+  // ---- scope --------------------------------------------------------------
+  var canvas = $("scope"), ctx = canvas.getContext("2d");
+
+  function fit(el, c) {
+    var r = el.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+    el.width = Math.max(1, Math.floor(r.width * dpr));
+    el.height = Math.max(1, Math.floor(r.height * dpr));
+    c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function resize() {
+    fit(canvas, ctx);
+    fit(wf, wfx);
+  }
+  window.addEventListener("resize", resize);
+
+  function levelColor(level) {
+    var v = getComputedStyle(document.documentElement)
+      .getPropertyValue("--" + (LEVELS[level] || "error"));
+    return v.trim() || "#FFAE3D";
+  }
+
+  function drawScope() {
+    var r = canvas.getBoundingClientRect(), w = r.width, h = r.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // Grid: one line per second of the visible window.
+    ctx.strokeStyle = "rgba(255,180,50,.07)";
+    ctx.lineWidth = 1;
+    var perSec = w / (WINDOW_MS / 1000);
+    for (var x = (w * PLAYHEAD) % perSec; x < w; x += perSec) {
+      ctx.beginPath(); ctx.moveTo(Math.round(x) + .5, 0); ctx.lineTo(Math.round(x) + .5, h); ctx.stroke();
+    }
+    ctx.strokeStyle = "rgba(255,180,50,.10)";
+    ctx.beginPath(); ctx.moveTo(0, Math.round(h / 2) + .5); ctx.lineTo(w, Math.round(h / 2) + .5); ctx.stroke();
+
+    // Pitch gridlines: the trace's height tracks frequency, so label the three
+    // pitches the station actually uses.
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.textBaseline = "middle";
+    [[800, "800"], [700, "700"], [600, "600"]].forEach(function (row) {
+      var pitch = (row[0] - 500) / 400;
+      var amp = Math.min(38 + pitch * 52, h / 2 - 10);
+      [h / 2 - amp, h / 2 + amp].forEach(function (y) {
+        ctx.strokeStyle = "rgba(255,180,50,.07)";
+        ctx.beginPath(); ctx.moveTo(34, Math.round(y) + .5); ctx.lineTo(w, Math.round(y) + .5); ctx.stroke();
+      });
+      ctx.fillStyle = "rgba(160,176,192,.55)";
+      ctx.fillText(row[1], 4, h / 2 - amp);
+    });
+
+    if (playing) {
+      var nowMs = elapsedUnits() * playing.unitMs;
+      var color = levelColor(playing.level);
+
+      // Pitch sets how tall the trace is: a higher tone stands taller.
+      var pitch = Math.min(1, Math.max(0, (playing.freq - 500) / 400));
+      // Fixed pixel scale, not a fraction of the canvas: clamping a
+      // height-proportional amplitude collapsed all three pitches onto one
+      // line, which quietly destroyed the vertical axis.
+      var amp = Math.min(38 + pitch * 52, h / 2 - 10);
+      var mid = h / 2;
+
+      var msToX = w / WINDOW_MS;
+      spans.forEach(function (s) {
+        var startMs = s.start * playing.unitMs;
+        var lenMs = s.len * playing.unitMs;
+        var x0 = (w * PLAYHEAD) + (startMs - nowMs) * msToX;
+        var x1 = x0 + lenMs * msToX;
+        if (x1 < -20 || x0 > w + 20) return;
+
+        var sent = startMs + lenMs <= nowMs;
+        var live = startMs <= nowMs && nowMs < startMs + lenMs;
+
+        ctx.globalAlpha = live ? 1 : (sent ? 0.5 : 0.22);
+        ctx.fillStyle = color;
+        ctx.fillRect(x0, mid - amp, Math.max(1.5, x1 - x0), amp * 2);
+
+        if (live) {
+          ctx.globalAlpha = 0.28;
+          ctx.fillRect(x0, mid - amp * 1.35, Math.max(1.5, x1 - x0), amp * 2.7);
+        }
+      });
+      ctx.globalAlpha = 1;
+    }
+
+    if (!playing) {
+      // Standby: a quiet baseline with a slow sweep along it, so an idle
+      // station reads as listening rather than as a dead panel.
+      var mid = h / 2;
+      ctx.strokeStyle = "rgba(255,180,50,.14)";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(w, mid); ctx.stroke();
+
+      var sweep = ((performance.now() / 7000) % 1) * (w + 300) - 150;
+      var glow = ctx.createLinearGradient(sweep - 150, 0, sweep + 150, 0);
+      glow.addColorStop(0, "rgba(0, 255, 136, 0)");
+      glow.addColorStop(0.5, "rgba(0, 255, 136, 0.5)");
+      glow.addColorStop(1, "rgba(0, 255, 136, 0)");
+      ctx.strokeStyle = glow;
+      ctx.beginPath(); ctx.moveTo(0, mid); ctx.lineTo(w, mid); ctx.stroke();
+      ctx.lineWidth = 1;
+    }
+
+    // Playhead.
+    var px = Math.round(w * PLAYHEAD) + .5;
+    ctx.strokeStyle = playing ? "#00ff88" : "rgba(255,180,50,.30)";
+    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, h); ctx.stroke();
+  }
+
+
+  // ---- waterfall -----------------------------------------------------------
+  // Every transmission the station has sent recently, drawn in its pitch lane:
+  // time runs left to right, now is the right edge, each bar is one message and
+  // its length is its real airtime. Drops appear as ticks, because an alert that
+  // was shed is information too.
+  var WF_WINDOW_MS = 4 * 60 * 1000;
+  var LANES = [800, 700, 600];              // top to bottom, as pitch descends
+  var history = [];                          // {t0, ms, level, freq, dropped}
+
+  var wf = $("waterfall"), wfx = wf.getContext("2d");
+
+  function laneOf(freq) {
+    var i = LANES.indexOf(freq);
+    return i < 0 ? 1 : i;                    // an unranked pitch sits in the middle
+  }
+
+  function remember(entry) {
+    history.push(entry);
+    // Keep a little beyond the window so bars can scroll out smoothly.
+    var cutoff = Date.now() - WF_WINDOW_MS * 1.2;
+    while (history.length && history[0].t0 + (history[0].ms || 0) < cutoff) history.shift();
+  }
+
+  function rememberStart(ev) {
+    var t = ev.transmission;
+    if (!t) return;
+    remember({
+      t0: ev.atMs || Date.now(),
+      ms: t.seconds * 1000,
+      level: t.level,
+      freq: t.freq,
+      text: t.text,
+    });
+  }
+
+  function rememberDrop(ev) {
+    var t = ev.transmission;
+    remember({
+      t0: ev.atMs || Date.now(),
+      ms: 0,
+      level: t ? t.level : "error",
+      freq: t ? t.freq : 700,
+      dropped: true,
+      text: t ? t.text : "",
+    });
+  }
+
+  function drawWaterfall() {
+    var r = wf.getBoundingClientRect(), w = r.width, h = r.height;
+    wfx.clearRect(0, 0, w, h);
+    if (w < 2 || h < 2) return;
+
+    var now = Date.now();
+    var left = now - WF_WINDOW_MS;
+    var xOf = function (t) { return ((t - left) / WF_WINDOW_MS) * w; };
+
+    var pad = 16;                             // room for the lane labels
+    var laneH = (h - pad) / LANES.length;
+
+    // Lane bands and pitch labels.
+    wfx.font = '10px ui-monospace, monospace';
+    wfx.textBaseline = "middle";
+    LANES.forEach(function (freq, i) {
+      var yMid = pad + laneH * i + laneH / 2;
+      wfx.strokeStyle = "rgba(255,180,50,.08)";
+      wfx.beginPath(); wfx.moveTo(30, Math.round(yMid) + .5); wfx.lineTo(w, Math.round(yMid) + .5); wfx.stroke();
+      wfx.fillStyle = "rgba(160,176,192,.55)";
+      wfx.fillText(freq, 2, yMid);
+    });
+
+    // Minute gridlines, so the axis is readable rather than implied.
+    for (var m = 0; m <= 4; m += 1) {
+      var x = Math.round(xOf(now - m * 60000)) + .5;
+      wfx.strokeStyle = "rgba(255,180,50,.07)";
+      wfx.beginPath(); wfx.moveTo(x, pad); wfx.lineTo(x, h); wfx.stroke();
+      wfx.fillStyle = "rgba(136,153,170,.7)";
+      wfx.fillText(m === 0 ? "now" : "-" + m + "m", Math.min(x + 3, w - 24), 7);
+    }
+
+    // The transmissions themselves, oldest first so newer ones draw over.
+    history.forEach(function (e) {
+      var lane = laneOf(e.freq);
+      var yMid = pad + laneH * lane + laneH / 2;
+      var barH = Math.max(8, Math.min(laneH * 0.62, 22));
+      var colour = levelColor(e.level);
+      var age = (now - e.t0) / WF_WINDOW_MS;              // 0 = now, 1 = falling off
+      wfx.globalAlpha = Math.max(0.22, 1 - age * 0.75);
+
+      if (e.dropped) {
+        // A shed alert never sounded, so it gets a tick rather than a bar.
+        var dx = xOf(e.t0);
+        wfx.strokeStyle = colour;
+        wfx.lineWidth = 1.5;
+        wfx.beginPath();
+        wfx.moveTo(dx - 4, yMid - 5); wfx.lineTo(dx + 4, yMid + 5);
+        wfx.moveTo(dx + 4, yMid - 5); wfx.lineTo(dx - 4, yMid + 5);
+        wfx.stroke();
+        wfx.lineWidth = 1;
+        return;
+      }
+
+      // A message still on the air has no end yet; it grows to the right edge.
+      var end = e.t0 + e.ms;
+      var live = playing && end > now;
+      var x0 = xOf(e.t0), x1 = xOf(live ? now : end);
+      if (x1 < 0 || x0 > w) return;
+
+      wfx.fillStyle = colour;
+      wfx.fillRect(x0, yMid - barH / 2, Math.max(2, x1 - x0), barH);
+
+      if (live) {
+        // Leading edge, so the one currently sending is obvious.
+        wfx.globalAlpha = 1;
+        wfx.fillStyle = "#00ff88";
+        wfx.fillRect(x1 - 1.5, yMid - barH / 2 - 2, 2.5, barH + 4);
+      }
+    });
+    wfx.globalAlpha = 1;
+
+    if (!history.length) {
+      wfx.fillStyle = "rgba(136,153,170,.75)";
+      wfx.font = '12px ui-monospace, monospace';
+      wfx.fillText("No traffic yet — sent alerts appear here, newest at the right", 34, h / 2);
+    }
+  }
+
+  // ---- decode strip -------------------------------------------------------
+  var decodeEls = [];
+
+  function buildDecode(t) {
+    var box = $("decode");
+    box.textContent = "";
+    decodeEls = [];
+
+    t.symbols.forEach(function (s) {
+      var el = document.createElement("span");
+      el.className = "ch" + (s.code ? "" : " sp");
+      el.textContent = s.text;
+      box.appendChild(el);
+      decodeEls.push({ el: el, sym: s });
+    });
+  }
+
+  var shownSymbol = null;
+
+  function paintDecode() {
+    if (!playing) return;
+    var u = elapsedUnits(), current = null, lastCoded = null;
+
+    decodeEls.forEach(function (d) {
+      var s = d.sym, cls = "ch" + (s.code ? "" : " sp");
+      if (u >= s.start + s.units) {
+        cls += " sent";
+        if (s.code) lastCoded = s;
+      } else if (u >= s.start) {
+        cls += " now";
+        if (s.code) current = s;
+      }
+      if (d.el.className !== cls) d.el.className = cls;
+    });
+
+    // Inside a gap there is no current character, so hold the previous one
+    // rather than blanking — at 13 WPM a word gap is over half a second.
+    var show = current || lastCoded;
+    var cur = $("cursor");
+    cur.className = current ? "" : "gap";
+
+    if (show !== shownSymbol) {
+      shownSymbol = show;
+      cur.textContent = "";
+      if (show) {
+        var code = document.createElement("span");
+        code.textContent = show.code.replace(/\./g, "·").replace(/-/g, "–");
+        cur.appendChild(code);
+
+        var name = document.createElement("span");
+        name.className = "sym";
+        name.textContent = show.text;
+        cur.appendChild(name);
+      }
+    }
+  }
+
+  // ---- panels -------------------------------------------------------------
+  function chip(level) {
+    var s = document.createElement("span");
+    s.className = "chip " + (LEVELS[level] || "error");
+    s.textContent = level || "error";
+    return s;
+  }
+
+  function fmtClock(sec) {
+    sec = Math.max(0, Math.round(sec));
+    if (sec < 60) return sec + "s";
+    return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0");
+  }
+
+  // Seconds left in the message on the air.
+  function remaining() {
+    if (!playing) return 0;
+    return Math.max(0, playing.seconds - elapsedUnits() * playing.unitMs / 1000);
+  }
+
+  var queueData = [];
+
+  function renderQueue(queue) {
+    queueData = queue || [];
+
+    var box = $("queue");
+    box.textContent = "";
+
+    if (!queueData.length) {
+      box.appendChild(emptyQueue());
+      $("backlog").textContent = "";
+      return;
+    }
+
+    var total = 0;
+    queueData.forEach(function (t, i) {
+      var row = document.createElement("div");
+      row.className = "row" + (i === 0 ? " next" : "");
+
+      row.appendChild(chip(t.level));
+
+      var when = document.createElement("div");
+      when.className = "when";
+      row.appendChild(when);
+
+      var text = document.createElement("div");
+      text.className = "text";
+      text.textContent = t.text;
+      row.appendChild(text);
+
+      box.appendChild(row);
+      total += t.seconds;
+    });
+
+    tickQueue();
+    $("backlog").textContent = fmtClock(total) + " to send";
+  }
+
+  // The waits count down between events rather than going stale, so the panel
+  // answers "when will I hear this" at the moment someone looks at it.
+  function tickQueue() {
+    var rows = $("queue").querySelectorAll(".row");
+    var wait = remaining();
+
+    for (var i = 0; i < rows.length && i < queueData.length; i++) {
+      var el = rows[i].querySelector(".when");
+      var label = (i === 0 ? "next in " : "in ") + fmtClock(wait);
+      if (el.textContent !== label) el.textContent = label;
+      wait += queueData[i].seconds;
+    }
+  }
+
+  function emptyQueue() {
+    var d = document.createElement("div");
+    d.className = "empty";
+    d.textContent = "Nothing waiting. Alerts are sent one at a time, in the order they arrive.";
+    return d;
+  }
+
+  // The standby screen doubles as the operator's cheat sheet: the room can see
+  // how an alert gets here, and so can whoever is driving the demo.
+  function emptyDecode() {
+    var d = document.createElement("div");
+    d.className = "empty";
+
+    var intro = document.createElement("div");
+    intro.textContent = "Standby — nothing on the air. The next alert is decoded here, "
+      + "one character at a time, in step with the tone.";
+    d.appendChild(intro);
+
+    var cmd = document.createElement("div");
+    cmd.className = "cmd";
+    cmd.textContent = "curl -X POST " + location.origin + "/test \\\n"
+      + "  -d '{\"project\":\"checkout-api\",\"level\":\"fatal\",\"title\":\"DB pool exhausted\"}'";
+    d.appendChild(cmd);
+
+    var hint = document.createElement("div");
+    hint.textContent = "Sentry alerts arrive on POST /webhook/sentry, signed with the client secret.";
+    d.appendChild(hint);
+
+    return d;
+  }
+
+  // Restart a CSS animation on an element that is already in the document.
+  function pulse(el) {
+    el.classList.remove("handover");
+    void el.offsetWidth;
+    el.classList.add("handover");
+  }
+
+  // Every event stays available for inspection, keyed by the sequence number
+  // the server stamps on it.
+  var seen = new Map();
+  var pinned = null;
+
+  function addLogLine(ev) {
+    if (ev.kind === "queued" || ev.kind === "finished") return; // too chatty to show
+
+    seen.set(ev.seq, ev);
+
+    var line = document.createElement("button");
+    line.type = "button";
+    line.className = "ev " + ev.kind;
+    line.setAttribute("aria-pressed", "false");
+    line.dataset.seq = ev.seq;
+
+    var t = document.createElement("span"); t.className = "t"; t.textContent = ev.at;
+    var k = document.createElement("span"); k.className = "k"; k.textContent = ev.kind;
+    var d = document.createElement("span"); d.className = "d";
+    var label = ev.note || (ev.transmission ? ev.transmission.text : "");
+    if (ev.sentryLagMs) label = "+" + (ev.sentryLagMs / 1000).toFixed(1) + "s  " + label;
+    d.textContent = label;
+
+    line.append(t, k, d);
+    line.addEventListener("click", function () {
+      pinned === ev.seq ? unpin() : pin(ev.seq);
+    });
+
+    $("log").appendChild(line);
+    while ($("log").childNodes.length > 60) $("log").removeChild($("log").firstChild);
+    $("logEmpty").hidden = true;
+  }
+
+  // A started or dropped event carries no payload of its own, so fall back to
+  // the most recent received event for the same message — that is the request
+  // this transmission came from.
+  function payloadFor(ev) {
+    if (ev.payload) return ev;
+    if (!ev.transmission) return null;
+
+    var match = null;
+    seen.forEach(function (other) {
+      if (other.payload && other.transmission &&
+          other.transmission.text === ev.transmission.text &&
+          other.seq <= ev.seq) {
+        match = other;
+      }
+    });
+    return match;
+  }
+
+  function pin(seq) {
+    var ev = seen.get(seq);
+    if (!ev) return;
+
+    pinned = seq;
+    markPinned();
+
+    $("payloadTitle").textContent = "Event " + ev.kind;
+    $("unpin").hidden = false;
+    renderPayload(ev, payloadFor(ev));
+  }
+
+  function unpin() {
+    pinned = null;
+    markPinned();
+
+    $("payloadTitle").textContent = "Last payload";
+    $("unpin").hidden = true;
+
+    // Fall back to the newest received event so the panel is never blank.
+    var latest = null;
+    seen.forEach(function (e) { if (e.payload) latest = e; });
+    if (latest) renderPayload(latest, latest);
+  }
+
+  function markPinned() {
+    $("log").querySelectorAll(".ev").forEach(function (el) {
+      el.setAttribute("aria-pressed", String(Number(el.dataset.seq) === pinned));
+    });
+  }
+
+  function renderPayload(ev, source) {
+    var t = ev.transmission;
+
+    var meta = $("payloadMeta");
+    meta.textContent = "";
+    function fact(label, value) {
+      if (!value && value !== 0) return;
+      var s = document.createElement("span");
+      var b = document.createElement("b");
+      b.textContent = value;
+      s.append(label + " ", b);
+      meta.appendChild(s);
+    }
+
+    fact("at", ev.at);
+    if (ev.resource) fact("resource", ev.resource);
+    // The number that explains the wait: everything sidetone does is ~5ms, so
+    // this is Sentry's own pipeline, start to finish.
+    if (ev.sentryLagMs) fact("inside Sentry", (ev.sentryLagMs / 1000).toFixed(1) + "s");
+    if (t) {
+      fact("level", t.level);
+      fact("speed", t.wpm + " wpm");
+      fact("pitch", t.freq + " Hz");
+      fact("airtime", t.seconds.toFixed(1) + "s");
+    }
+    fact("depth", ev.depth);
+
+    $("payloadFrom").textContent = (source && source.endpoint) || ev.endpoint || "";
+
+    if (source && source.payload) {
+      $("payload").textContent = source.payload;
+    } else {
+      $("payload").textContent = ev.note
+        ? ev.note
+        : "No payload recorded for this event — it happened after the alert was accepted.";
+    }
+
+    $("payloadMsg").textContent = t ? "→ " + t.text : "";
+  }
+
+  function setCounters() {
+    $("cDepth").textContent = stats.depth;
+    $("cPlayed").textContent = stats.played;
+    $("cDropped").textContent = stats.dropped;
+  }
+
+  function setPlaying(t, elapsedMs) {
+    playing = t;
+    if (!t) {
+      $("lamp").className = "lamp";
+      $("lampText").textContent = "Standby";
+      $("nowChip").textContent = "";
+      $("nowWpm").textContent = "—";
+      $("nowFreq").textContent = "—";
+      $("nowTime").textContent = "0.0";
+      $("nowTotal").textContent = "0.0";
+      $("progress").style.transform = "scaleX(0)";
+      $("cursor").textContent = "";
+
+      var box = $("decode");
+      box.textContent = "";
+      box.appendChild(emptyDecode());
+
+      spans = [];
+      decodeEls = [];
+      return;
+    }
+
+    originMs = performance.now() - (elapsedMs || 0);
+    spans = toSpans(t);
+
+    $("lamp").className = "lamp on";
+    $("lampText").textContent = "On air";
+    $("nowChip").textContent = "";
+    $("nowChip").appendChild(chip(t.level));
+    $("nowWpm").textContent = t.wpm;
+    $("nowFreq").textContent = t.freq;
+    $("nowTotal").textContent = t.seconds.toFixed(1);
+    buildDecode(t);
+
+    // The one authored moment on the page: a handover is worth noticing,
+    // because the sound changes speed and pitch at the same instant.
+    pulse($("decode"));
+    pulse($("nowChip"));
+  }
+
+  function showPayload(ev) {
+    if (!ev.payload) return;
+    // While an event is pinned the panel belongs to whoever is investigating;
+    // a new alert must not pull the evidence out from under them.
+    if (pinned !== null) return;
+    renderPayload(ev, ev);
+  }
+
+  // ---- animation ----------------------------------------------------------
+  var lastTick = 0, lastClock = 0;
+
+  // Two clocks, as the reference leads with. Seconds precision is enough and
+  // avoids rewriting the DOM 60 times a second for no visible gain.
+  function tickClocks() {
+    var d = new Date();
+    var pad = function (n) { return String(n).padStart(2, "0"); };
+
+    $("clockUTC").textContent =
+      pad(d.getUTCHours()) + ":" + pad(d.getUTCMinutes()) + ":" + pad(d.getUTCSeconds());
+    $("dateUTC").textContent =
+      d.getUTCFullYear() + "-" + pad(d.getUTCMonth() + 1) + "-" + pad(d.getUTCDate());
+
+    $("clockLocal").textContent =
+      pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+    $("dateLocal").textContent =
+      ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][d.getDay()];
+  }
+
+  function frame(now) {
+    if (playing) {
+      var el = elapsedUnits() * playing.unitMs / 1000;
+      var total = playing.seconds;
+      $("nowTime").textContent = Math.max(0, Math.min(el, total)).toFixed(1);
+      $("progress").style.transform =
+        "scaleX(" + Math.max(0, Math.min(1, el / total)) + ")";
+      paintDecode();
+    }
+
+    // The queue's countdown only needs to move twice a second, and rewriting
+    // it every frame would churn the DOM for nothing.
+    if (!lastTick || now - lastTick > 500) {
+      lastTick = now;
+      tickQueue();
+    }
+    if (!lastClock || now - lastClock > 250) {
+      lastClock = now;
+      tickClocks();
+    }
+
+    drawScope();
+    drawWaterfall();
+    requestAnimationFrame(frame);
+  }
+
+  // ---- stream -------------------------------------------------------------
+  function applyState(s) {
+    stats.depth = s.depth; stats.played = s.played; stats.dropped = s.dropped;
+    setCounters();
+    renderQueue(s.queue);
+    setPlaying(s.playing, s.playing ? s.playing.elapsed : 0);
+
+    $("log").textContent = "";
+    $("logEmpty").hidden = false;
+    history = [];
+    (s.recent || []).forEach(function (ev) {
+      addLogLine(ev);
+      if (ev.kind === "received") showPayload(ev);
+      // Rebuild the waterfall from the replayed backlog rather than starting
+      // blank every time the page reconnects.
+      if (ev.kind === "started") rememberStart(ev);
+      if (ev.kind === "dropped") rememberDrop(ev);
+    });
+
+    // The message already on the air started before we connected.
+    if (s.playing) {
+      remember({
+        t0: Date.now() - (s.playing.elapsed || 0),
+        ms: s.playing.seconds * 1000,
+        level: s.playing.level,
+        freq: s.playing.freq,
+        text: s.playing.text,
+      });
+    }
+
+    // A reconnect replaces the rows; keep whatever was being inspected.
+    markPinned();
+  }
+
+  function applyEvent(ev) {
+    stats.depth = ev.depth;
+
+    switch (ev.kind) {
+      case "received": showPayload(ev); break;
+      case "started":  setPlaying(ev.transmission, 0); rememberStart(ev); break;
+      case "finished": stats.played++; setPlaying(null, 0); break;
+      case "dropped":  stats.dropped++; rememberDrop(ev); break;
+    }
+
+    addLogLine(ev);
+    setCounters();
+
+    // The queue changed on every one of these, so re-read it.
+    fetch("/state").then(function (r) { return r.json(); })
+      .then(function (s) { renderQueue(s.queue); stats.depth = s.depth; setCounters(); })
+      .catch(function () {});
+  }
+
+  function connect() {
+    var es = new EventSource("/events");
+
+    es.addEventListener("state", function (m) {
+      $("conn").className = "";
+      applyState(JSON.parse(m.data));
+    });
+    es.addEventListener("event", function (m) { applyEvent(JSON.parse(m.data)); });
+
+    es.onerror = function () { $("conn").className = "show"; };
+  }
+
+  $("unpin").addEventListener("click", unpin);
+
+  // Escape is the expected way out of an inspection.
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && pinned !== null) unpin();
+  });
+
+  tickClocks();
+  resize();
+  requestAnimationFrame(frame);
+  connect();
+})();
+</script>
+</body>
+</html>
