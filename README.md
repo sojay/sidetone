@@ -159,4 +159,3 @@ internal/trigger/   sends a real error to Sentry
   something that only reports the present.
 - Go standard library throughout, plus one dependency for the soundcard. If no
   audio device is available it writes a WAV and shells out to the system player.
-- Radio transmission is out of scope, and always will be.
